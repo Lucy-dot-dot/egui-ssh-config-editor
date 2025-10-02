@@ -1,12 +1,27 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod ssh_config;
 
-use eframe::egui;
+use eframe::{egui, CreationContext};
 use ssh_config::{ConfigLine, SshConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
 use egui::{ViewportCommand, WindowLevel};
 
 fn main() -> Result<(), eframe::Error> {
+    // Set up panic handler to allocate console on Windows if needed
+    #[cfg(all(windows, not(debug_assertions)))]
+    {
+        std::panic::set_hook(Box::new(|panic_info| {
+            unsafe {
+                // Allocate console for crash output
+                winapi::um::consoleapi::AllocConsole();
+            }
+            eprintln!("Application panicked: {}", panic_info);
+            eprintln!("\nPress Enter to exit...");
+            let _ = std::io::stdin().read_line(&mut String::new());
+        }));
+    }
 
     let icon = Arc::new(eframe::icon_data::from_png_bytes(include_bytes!("../icon.png")).expect("Failed to load icon"));
 
@@ -14,6 +29,7 @@ fn main() -> Result<(), eframe::Error> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1000.0, 700.0])
             .with_active(true)
+            .with_title("SSH Config Editor")
             .with_icon(icon),
         ..Default::default()
     };
@@ -21,7 +37,7 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "SSH Config Editor",
         options,
-        Box::new(|_cc| Ok(Box::new(SshConfigApp::new()))),
+        Box::new(|cc| Ok(Box::new(SshConfigApp::new(cc)))),
     )
 }
 
@@ -45,7 +61,7 @@ struct SshConfigApp {
 }
 
 impl SshConfigApp {
-    fn new() -> Self {
+    fn new(_cc: &CreationContext) -> Self {
         Self {
             config: None,
             config_path: None,
@@ -110,6 +126,251 @@ impl SshConfigApp {
                 self.status_message = format!("Default config not found: {}", default_path.display());
             }
         }
+    }
+
+    fn show_shortcuts_popup(&mut self, ctx: &egui::Context) {
+        egui::Window::new("⌨ Keyboard Shortcuts")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_min_width(400.0);
+
+                ui.heading("File Operations");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Ctrl+O").monospace().strong());
+                    ui.label("Open SSH config file");
+                });
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Ctrl+N").monospace().strong());
+                    ui.label("New host entry");
+                });
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Ctrl+S").monospace().strong());
+                    ui.label("Save all changes");
+                });
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Ctrl+Q").monospace().strong());
+                    ui.label("Quit (prompts to save if dirty)");
+                });
+
+                ui.add_space(10.0);
+                ui.heading("Search & Navigation");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Ctrl+F").monospace().strong());
+                    ui.label("Focus search box");
+                });
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Escape").monospace().strong());
+                    ui.label("Clear search / unfocus");
+                });
+
+                ui.add_space(10.0);
+                ui.heading("View");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Ctrl+A").monospace().strong());
+                    ui.label("Toggle always on top");
+                });
+
+                ui.add_space(10.0);
+                ui.heading("Quick Actions");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Ctrl+Shift+L").monospace().strong());
+                    ui.label("Add legacy SSH options");
+                });
+                ui.label(
+                    egui::RichText::new("  (to selected host)")
+                        .color(egui::Color32::GRAY)
+                        .italics(),
+                );
+
+                ui.add_space(10.0);
+                ui.heading("Legacy SSH Options");
+                ui.separator();
+                ui.label(egui::RichText::new("Adds these options:").color(egui::Color32::GRAY));
+                ui.label(egui::RichText::new("  • HostKeyAlgorithms +ssh-rsa,ssh-rsa-cert-v01@openssh.com").monospace().small());
+                ui.label(egui::RichText::new("  • PubkeyAcceptedAlgorithms +ssh-rsa,ssh-rsa-cert-v01@openssh.com").monospace().small());
+                ui.label(egui::RichText::new("  • Ciphers +aes256-cbc,aes128-cbc").monospace().small());
+                ui.label(egui::RichText::new("  • MACs +aes256-cbc,hmac-sha1").monospace().small());
+                ui.label(egui::RichText::new("  • KexAlgorithms +diffie-hellman-group1-sha1").monospace().small());
+                ui.add_space(15.0);
+                ui.separator();
+                if ui.button("Close").clicked() {
+                    self.show_shortcuts = false;
+                }
+            });
+    }
+
+    fn show_quit_dialog(&mut self, ctx: &egui::Context) {
+        egui::Window::new("⚠ Unsaved Changes")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_min_width(300.0);
+
+                ui.label("You have unsaved changes. Do you want to save before quitting?");
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button("Save and Quit").clicked() {
+                        self.save_config();
+                        ctx.send_viewport_cmd(ViewportCommand::Close);
+                        self.show_quit_dialog = false;
+                    }
+
+                    if ui.button("Quit Without Saving").clicked() {
+                        ctx.send_viewport_cmd(ViewportCommand::Close);
+                        self.show_quit_dialog = false;
+                    }
+
+                    if ui.button("Cancel").clicked() {
+                        self.show_quit_dialog = false;
+                    }
+                });
+            });
+    }
+
+    fn show_new_host_dialog(&mut self, ctx: &egui::Context) {
+        egui::Window::new("➕ New Host Entry")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_min_width(400.0);
+
+                ui.label("Create a new SSH host entry:");
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Host Pattern:");
+                    let pattern_response = ui.text_edit_singleline(&mut self.new_host_pattern);
+
+                    // Enter on host pattern creates the entry (if valid)
+                    if pattern_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        let can_create = !self.new_host_pattern.is_empty()
+                            && self.new_host_target_file.is_some();
+
+                        if can_create {
+                            if let (Some(config), Some(target_file)) =
+                                (&mut self.config, &self.new_host_target_file)
+                            {
+                                // Create new host entry
+                                let new_entry = ConfigLine::HostEntry {
+                                    pattern: self.new_host_pattern.clone(),
+                                    options: Vec::new(),
+                                    source_file: target_file.clone(),
+                                };
+
+                                config.lines.push(new_entry);
+
+                                self.is_dirty = true;
+                                self.status_message = format!(
+                                    "Created new host '{}' in {}",
+                                    self.new_host_pattern,
+                                    target_file.display()
+                                );
+
+                                self.selected_host = Some(config.lines.len() - 1);
+
+                                self.new_host_pattern.clear();
+                                self.new_host_target_file = None;
+                                self.show_new_host_dialog = false;
+                            }
+                        }
+                    }
+                });
+
+                ui.add_space(5.0);
+
+                // File selection dropdown
+                ui.horizontal(|ui| {
+                    ui.label("Target File:");
+
+                    if let Some(config) = &self.config {
+                        // Build list of all files (main + included)
+                        let mut all_files = vec![];
+                        if let Some(main_path) = &self.config_path {
+                            all_files.push(main_path.clone());
+                        }
+                        for (include_path, _) in &config.included_files {
+                            all_files.push(include_path.clone());
+                        }
+
+                        if !all_files.is_empty() {
+                            // Set default if not set
+                            if self.new_host_target_file.is_none() {
+                                self.new_host_target_file = Some(all_files[0].clone());
+                            }
+
+                            egui::ComboBox::from_id_salt("target_file_combo")
+                                .selected_text(
+                                    self.new_host_target_file
+                                        .as_ref()
+                                        .map(|p| p.display().to_string())
+                                        .unwrap_or_else(|| "Select file...".to_string()),
+                                )
+                                .show_ui(ui, |ui| {
+                                    for file in &all_files {
+                                        let is_selected = self.new_host_target_file.as_ref() == Some(file);
+                                        if ui.selectable_label(is_selected, file.display().to_string()).clicked() {
+                                            self.new_host_target_file = Some(file.clone());
+                                        }
+                                    }
+                                });
+                        }
+                    }
+                });
+
+                ui.add_space(15.0);
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    let can_create = !self.new_host_pattern.is_empty()
+                        && self.new_host_target_file.is_some();
+
+                    if ui.add_enabled(can_create, egui::Button::new("Create")).clicked() {
+                        if let (Some(config), Some(target_file)) =
+                            (&mut self.config, &self.new_host_target_file)
+                        {
+                            // Create new host entry
+                            let new_entry = ConfigLine::HostEntry {
+                                pattern: self.new_host_pattern.clone(),
+                                options: Vec::new(),
+                                source_file: target_file.clone(),
+                            };
+
+                            // Add to the end
+                            config.lines.push(new_entry);
+
+                            self.is_dirty = true;
+                            self.status_message = format!(
+                                "Created new host '{}' in {}",
+                                self.new_host_pattern,
+                                target_file.display()
+                            );
+
+                            // Select the newly created host
+                            self.selected_host = Some(config.lines.len() - 1);
+
+                            // Clear and close
+                            self.new_host_pattern.clear();
+                            self.new_host_target_file = None;
+                            self.show_new_host_dialog = false;
+                        }
+                    }
+
+                    if ui.button("Cancel").clicked() {
+                        self.new_host_pattern.clear();
+                        self.new_host_target_file = None;
+                        self.show_new_host_dialog = false;
+                    }
+                });
+            });
     }
 }
 
@@ -190,7 +451,7 @@ impl eframe::App for SshConfigApp {
         }
 
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+            egui::containers::menu::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Open SSH Config  (Ctrl+O)").clicked() || open_file {
                         if let Some(path) = rfd::FileDialog::new()
@@ -218,12 +479,12 @@ impl eframe::App for SshConfigApp {
                                 }
                             }
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
 
                     if ui.button("Save  (Ctrl+S)").clicked() {
                         self.save_config();
-                        ui.close_menu();
+                        ui.close();
                     }
 
                     if ui.button("Reload").clicked() {
@@ -248,7 +509,7 @@ impl eframe::App for SshConfigApp {
                                 }
                             }
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
 
                     ui.separator();
@@ -259,7 +520,7 @@ impl eframe::App for SshConfigApp {
                         } else {
                             ctx.send_viewport_cmd(ViewportCommand::Close);
                         }
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
 
@@ -278,7 +539,7 @@ impl eframe::App for SshConfigApp {
                             }
                         }
                         self.show_new_host_dialog = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
 
@@ -302,14 +563,14 @@ impl eframe::App for SshConfigApp {
                         } else {
                             "Always on top: disabled".to_string()
                         };
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
 
                 ui.menu_button("Help", |ui| {
                     if ui.button("Keyboard Shortcuts").clicked() {
                         self.show_shortcuts = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
             });
@@ -409,7 +670,7 @@ impl eframe::App for SshConfigApp {
                                 ("HostKeyAlgorithms", "+ssh-rsa,ssh-rsa-cert-v01@openssh.com"),
                                 ("PubkeyAcceptedAlgorithms", "+ssh-rsa,ssh-rsa-cert-v01@openssh.com"),
                                 ("Ciphers", "+aes256-cbc,aes128-cbc"),
-                                ("MACs", "+aes256-cbc,hmac-sha1"),
+                                ("MACs", "+hmac-sha1,hmac-md5"),
                                 ("KexAlgorithms", "+diffie-hellman-group1-sha1"),
                             ];
 
@@ -593,252 +854,17 @@ impl eframe::App for SshConfigApp {
             });
         }
 
-        // Shortcuts popup window
+        // Show popups
         if self.show_shortcuts {
-            egui::Window::new("⌨ Keyboard Shortcuts")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.set_min_width(400.0);
-
-                    ui.heading("File Operations");
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Ctrl+O").monospace().strong());
-                        ui.label("Open SSH config file");
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Ctrl+N").monospace().strong());
-                        ui.label("New host entry");
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Ctrl+S").monospace().strong());
-                        ui.label("Save all changes");
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Ctrl+Q").monospace().strong());
-                        ui.label("Quit (prompts to save if dirty)");
-                    });
-
-                    ui.add_space(10.0);
-                    ui.heading("Search & Navigation");
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Ctrl+F").monospace().strong());
-                        ui.label("Focus search box");
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Escape").monospace().strong());
-                        ui.label("Clear search / unfocus");
-                    });
-
-                    ui.add_space(10.0);
-                    ui.heading("View");
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Ctrl+A").monospace().strong());
-                        ui.label("Toggle always on top");
-                    });
-
-                    ui.add_space(10.0);
-                    ui.heading("Quick Actions");
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Ctrl+Shift+L").monospace().strong());
-                        ui.label("Add legacy SSH options");
-                    });
-                    ui.label(
-                        egui::RichText::new("  (to selected host)")
-                            .color(egui::Color32::GRAY)
-                            .italics(),
-                    );
-
-                    ui.add_space(10.0);
-                    ui.heading("Legacy SSH Options");
-                    ui.separator();
-                    ui.label(egui::RichText::new("Adds these options:").color(egui::Color32::GRAY));
-                    ui.label(egui::RichText::new("  • HostKeyAlgorithms +ssh-rsa,ssh-rsa-cert-v01@openssh.com").monospace().small());
-                    ui.label(egui::RichText::new("  • PubkeyAcceptedAlgorithms +ssh-rsa,ssh-rsa-cert-v01@openssh.com").monospace().small());
-                    ui.label(egui::RichText::new("  • Ciphers +aes256-cbc,aes128-cbc").monospace().small());
-                    ui.label(egui::RichText::new("  • MACs +aes256-cbc,hmac-sha1").monospace().small());
-                    ui.label(egui::RichText::new("  • KexAlgorithms +diffie-hellman-group1-sha1").monospace().small());
-                    ui.add_space(15.0);
-                    ui.separator();
-                    if ui.button("Close").clicked() {
-                        self.show_shortcuts = false;
-                    }
-                });
+            self.show_shortcuts_popup(ctx);
         }
 
-        // Quit confirmation dialog
         if self.show_quit_dialog {
-            egui::Window::new("⚠ Unsaved Changes")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.set_min_width(300.0);
-
-                    ui.label("You have unsaved changes. Do you want to save before quitting?");
-                    ui.add_space(10.0);
-
-                    ui.horizontal(|ui| {
-                        if ui.button("Save and Quit").clicked() {
-                            self.save_config();
-                            ctx.send_viewport_cmd(ViewportCommand::Close);
-                            self.show_quit_dialog = false;
-                        }
-
-                        if ui.button("Quit Without Saving").clicked() {
-                            ctx.send_viewport_cmd(ViewportCommand::Close);
-                            self.show_quit_dialog = false;
-                        }
-
-                        if ui.button("Cancel").clicked() {
-                            self.show_quit_dialog = false;
-                        }
-                    });
-                });
+            self.show_quit_dialog(ctx);
         }
 
-        // New host entry dialog
         if self.show_new_host_dialog {
-            egui::Window::new("➕ New Host Entry")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.set_min_width(400.0);
-
-                    ui.label("Create a new SSH host entry:");
-                    ui.add_space(10.0);
-
-                    ui.horizontal(|ui| {
-                        ui.label("Host Pattern:");
-                        let pattern_response = ui.text_edit_singleline(&mut self.new_host_pattern);
-
-                        // Enter on host pattern creates the entry (if valid)
-                        if pattern_response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            let can_create = !self.new_host_pattern.is_empty()
-                                && self.new_host_target_file.is_some();
-
-                            if can_create {
-                                if let (Some(config), Some(target_file)) =
-                                    (&mut self.config, &self.new_host_target_file)
-                                {
-                                    // Create new host entry
-                                    let new_entry = ConfigLine::HostEntry {
-                                        pattern: self.new_host_pattern.clone(),
-                                        options: Vec::new(),
-                                        source_file: target_file.clone(),
-                                    };
-
-                                    config.lines.push(new_entry);
-
-                                    self.is_dirty = true;
-                                    self.status_message = format!(
-                                        "Created new host '{}' in {}",
-                                        self.new_host_pattern,
-                                        target_file.display()
-                                    );
-
-                                    self.selected_host = Some(config.lines.len() - 1);
-
-                                    self.new_host_pattern.clear();
-                                    self.new_host_target_file = None;
-                                    self.show_new_host_dialog = false;
-                                }
-                            }
-                        }
-                    });
-
-                    ui.add_space(5.0);
-
-                    // File selection dropdown
-                    ui.horizontal(|ui| {
-                        ui.label("Target File:");
-
-                        if let Some(config) = &self.config {
-                            // Build list of all files (main + included)
-                            let mut all_files = vec![];
-                            if let Some(main_path) = &self.config_path {
-                                all_files.push(main_path.clone());
-                            }
-                            for (include_path, _) in &config.included_files {
-                                all_files.push(include_path.clone());
-                            }
-
-                            if !all_files.is_empty() {
-                                // Set default if not set
-                                if self.new_host_target_file.is_none() {
-                                    self.new_host_target_file = Some(all_files[0].clone());
-                                }
-
-                                egui::ComboBox::from_id_salt("target_file_combo")
-                                    .selected_text(
-                                        self.new_host_target_file
-                                            .as_ref()
-                                            .map(|p| p.display().to_string())
-                                            .unwrap_or_else(|| "Select file...".to_string()),
-                                    )
-                                    .show_ui(ui, |ui| {
-                                        for file in &all_files {
-                                            let is_selected = self.new_host_target_file.as_ref() == Some(file);
-                                            if ui.selectable_label(is_selected, file.display().to_string()).clicked() {
-                                                self.new_host_target_file = Some(file.clone());
-                                            }
-                                        }
-                                    });
-                            }
-                        }
-                    });
-
-                    ui.add_space(15.0);
-                    ui.separator();
-
-                    ui.horizontal(|ui| {
-                        let can_create = !self.new_host_pattern.is_empty()
-                            && self.new_host_target_file.is_some();
-
-                        if ui.add_enabled(can_create, egui::Button::new("Create")).clicked() {
-                            if let (Some(config), Some(target_file)) =
-                                (&mut self.config, &self.new_host_target_file)
-                            {
-                                // Create new host entry
-                                let new_entry = ConfigLine::HostEntry {
-                                    pattern: self.new_host_pattern.clone(),
-                                    options: Vec::new(),
-                                    source_file: target_file.clone(),
-                                };
-
-                                // Add to the end
-                                config.lines.push(new_entry);
-
-                                self.is_dirty = true;
-                                self.status_message = format!(
-                                    "Created new host '{}' in {}",
-                                    self.new_host_pattern,
-                                    target_file.display()
-                                );
-
-                                // Select the newly created host
-                                self.selected_host = Some(config.lines.len() - 1);
-
-                                // Clear and close
-                                self.new_host_pattern.clear();
-                                self.new_host_target_file = None;
-                                self.show_new_host_dialog = false;
-                            }
-                        }
-
-                        if ui.button("Cancel").clicked() {
-                            self.new_host_pattern.clear();
-                            self.new_host_target_file = None;
-                            self.show_new_host_dialog = false;
-                        }
-                    });
-                });
+            self.show_new_host_dialog(ctx);
         }
     }
 }
