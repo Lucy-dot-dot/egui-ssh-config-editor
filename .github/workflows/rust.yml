@@ -1,0 +1,62 @@
+name: Rust
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache
+        uses: actions/cache@v4.3.0
+        with:
+          path: target
+          key: 'target-cache-linux'
+      - name: Build debug
+        run: cargo build
+      - name: Build release
+        run: cargo build --release
+      - name: Copy binaries
+        run: |
+          mv target/release/egui-ssh-config ./egui-ssh-config
+          mv target/debug/egui-ssh-config ./egui-ssh-config-debug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: egui-ssh-config
+          path: |
+            egui-ssh-config
+            egui-ssh-config-debug
+  build-windows:
+
+    runs-on: windows-2025
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache
+        uses: actions/cache@v4.3.0
+        with:
+          path: target
+          key: 'target-cache-windows'
+      - name: Build debug
+        run: cargo build
+      - name: Build release
+        run: cargo build --release
+      - name: Copy binaries
+        run: |
+          mv target/release/egui-ssh-config.exe ./egui-ssh-config.exe
+          mv target/debug/egui-ssh-config.exe ./egui-ssh-config-debug.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: egui-ssh-config-windows
+          path: |
+            egui-ssh-config.exe
+            egui-ssh-config-debug.exe
