@@ -667,11 +667,11 @@ impl eframe::App for SshConfigApp {
                         // Add legacy SSH options if Ctrl+Shift+L was pressed
                         if add_legacy {
                             let legacy_options = vec![
-                                ("HostKeyAlgorithms", "+ssh-rsa,ssh-rsa-cert-v01@openssh.com"),
+                                ("HostKeyAlgorithms", "+ssh-rsa,ssh-rsa-cert-v01@openssh.com,ssh-dss"),
                                 ("PubkeyAcceptedAlgorithms", "+ssh-rsa,ssh-rsa-cert-v01@openssh.com"),
-                                ("Ciphers", "+aes256-cbc,aes128-cbc"),
+                                ("Ciphers", "+aes256-cbc,aes128-cbc,3des-cbc"),
                                 ("MACs", "+hmac-sha1,hmac-md5"),
-                                ("KexAlgorithms", "+diffie-hellman-group1-sha1"),
+                                ("KexAlgorithms", "+diffie-hellman-group14-sha1,diffie-hellman-group1-sha1"),
                             ];
 
                             for (key, value) in legacy_options {
