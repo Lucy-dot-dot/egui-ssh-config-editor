@@ -704,6 +704,123 @@ impl eframe::App for SshConfigApp {
                         });
 
                         ui.separator();
+
+                        // Auth method switcher
+                        ui.horizontal(|ui| {
+                            ui.heading("Auth Method:");
+
+                            // Detect current auth method
+                            let has_password_auth = options.iter().any(|(k, v)|
+                                k.eq_ignore_ascii_case("PasswordAuthentication") && v.eq_ignore_ascii_case("yes")
+                            );
+                            let has_pubkey_auth = options.iter().any(|(k, v)|
+                                k.eq_ignore_ascii_case("PubkeyAuthentication") && v.eq_ignore_ascii_case("yes")
+                            );
+                            let has_identity_file = options.iter().any(|(k, _)|
+                                k.eq_ignore_ascii_case("IdentityFile")
+                            );
+
+                            let current_mode = if has_password_auth && !has_pubkey_auth {
+                                "password"
+                            } else if (has_pubkey_auth || has_identity_file) && !has_password_auth {
+                                "key"
+                            } else {
+                                "mixed"
+                            };
+
+                            ui.label(format!("Current: {}", match current_mode {
+                                "key" => "🔑 Key-based",
+                                "password" => "🔒 Password-based",
+                                _ => "Mixed/Default"
+                            }));
+
+                            ui.separator();
+
+                            // Switch to key-based auth
+                            if ui.button("🔑 Use Key Auth").clicked() {
+                                // Save existing IdentityFile entries before removing password auth
+                                let saved_identity_files: Vec<String> = options.iter()
+                                    .filter(|(k, _)| k.eq_ignore_ascii_case("IdentityFile"))
+                                    .map(|(_, v)| v.clone())
+                                    .collect();
+
+                                // Remove password auth options
+                                options.retain(|(k, _)| !k.eq_ignore_ascii_case("PasswordAuthentication"));
+
+                                // Add/update key auth options
+                                if !options.iter().any(|(k, _)| k.eq_ignore_ascii_case("PubkeyAuthentication")) {
+                                    options.push(("PubkeyAuthentication".to_string(), "yes".to_string()));
+                                } else {
+                                    for (k, v) in options.iter_mut() {
+                                        if k.eq_ignore_ascii_case("PubkeyAuthentication") {
+                                            *v = "yes".to_string();
+                                        }
+                                    }
+                                }
+
+                                // Restore or add identity files
+                                if saved_identity_files.is_empty() {
+                                    // Only add default if no identity file exists
+                                    if !options.iter().any(|(k, _)| k.eq_ignore_ascii_case("IdentityFile")) {
+                                        options.push(("IdentityFile".to_string(), "~/.ssh/id_rsa".to_string()));
+                                    }
+                                } else {
+                                    // Restore saved identity files if they were removed
+                                    if !options.iter().any(|(k, _)| k.eq_ignore_ascii_case("IdentityFile")) {
+                                        for identity_file in saved_identity_files {
+                                            options.push(("IdentityFile".to_string(), identity_file));
+                                        }
+                                    }
+                                }
+
+                                // Update PreferredAuthentications
+                                if !options.iter().any(|(k, _)| k.eq_ignore_ascii_case("PreferredAuthentications")) {
+                                    options.push(("PreferredAuthentications".to_string(), "publickey".to_string()));
+                                } else {
+                                    for (k, v) in options.iter_mut() {
+                                        if k.eq_ignore_ascii_case("PreferredAuthentications") {
+                                            *v = "publickey".to_string();
+                                        }
+                                    }
+                                }
+
+                                self.status_message = format!("Switched {} to key-based authentication", pattern);
+                                self.is_dirty = true;
+                            }
+
+                            // Switch to password auth
+                            if ui.button("🔒 Use Password Auth").clicked() {
+                                // Remove key auth options (PubkeyAuthentication only)
+                                options.retain(|(k, _)| !k.eq_ignore_ascii_case("PubkeyAuthentication"));
+
+                                // Add/update password auth
+                                if !options.iter().any(|(k, _)| k.eq_ignore_ascii_case("PasswordAuthentication")) {
+                                    options.push(("PasswordAuthentication".to_string(), "yes".to_string()));
+                                } else {
+                                    for (k, v) in options.iter_mut() {
+                                        if k.eq_ignore_ascii_case("PasswordAuthentication") {
+                                            *v = "yes".to_string();
+                                        }
+                                    }
+                                }
+
+                                // Update PreferredAuthentications
+                                if !options.iter().any(|(k, _)| k.eq_ignore_ascii_case("PreferredAuthentications")) {
+                                    options.push(("PreferredAuthentications".to_string(), "password".to_string()));
+                                } else {
+                                    for (k, v) in options.iter_mut() {
+                                        if k.eq_ignore_ascii_case("PreferredAuthentications") {
+                                            *v = "password".to_string();
+                                        }
+                                    }
+                                }
+
+                                self.status_message = format!("Switched {} to password authentication", pattern);
+                                self.is_dirty = true;
+                            }
+                        });
+
+                        ui.separator();
                         ui.heading("Options");
 
                         egui::ScrollArea::vertical().show(ui, |ui| {
